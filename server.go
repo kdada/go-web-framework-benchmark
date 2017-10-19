@@ -1,6 +1,7 @@
 package main
 
 import (
+	rcontext "context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +16,7 @@ import (
 	"github.com/astaxie/beego/context"
 	"github.com/bmizerany/pat"
 	"github.com/buaazp/fasthttprouter"
+	"github.com/caicloud/nirvana/router"
 	"github.com/dimfeld/httptreemux"
 	"github.com/dinever/golf"
 	"github.com/emicklei/go-restful"
@@ -180,6 +182,8 @@ func main() {
 		startVioletear()
 	case "vulcan":
 		startVulcan()
+	case "nirvana":
+		startNirvana()
 	}
 }
 
@@ -771,6 +775,95 @@ func startVulcan() {
 	mux.HandleFunc(expr, helloHandler)
 
 	http.ListenAndServe(":"+strconv.Itoa(port), mux)
+}
+
+type nirvanaExecutor struct {
+}
+
+func (e *nirvanaExecutor) Inspect(ctx rcontext.Context) (router.Executor, bool) {
+	ins := ctx.Value("Request")
+	if ins == nil {
+		return nil, false
+	}
+	req, ok := ins.(*http.Request)
+	if !ok {
+		return nil, false
+	}
+	if req.Method != "GET" {
+		return nil, false
+	}
+	return e, true
+}
+
+func (e *nirvanaExecutor) Execute(ctx rcontext.Context) error {
+	ins := ctx.Value("Request")
+	if ins == nil {
+		return fmt.Errorf("request error")
+	}
+	req, ok := ins.(*http.Request)
+	if !ok {
+		return fmt.Errorf("request error")
+	}
+	ins = ctx.Value("Response")
+	if ins == nil {
+		return fmt.Errorf("response error")
+	}
+	resp, ok := ins.(http.ResponseWriter)
+	if !ok {
+		return fmt.Errorf("response error")
+	}
+	helloHandler(resp, req)
+	return nil
+}
+
+type nirvanaContainer struct {
+	Data map[string]string
+}
+
+func (tvc *nirvanaContainer) Set(key, value string) {
+	tvc.Data[key] = value
+}
+
+func (tvc *nirvanaContainer) Get(key string) (string, bool) {
+	v, ok := tvc.Data[key]
+	return v, ok
+}
+
+type nirvanaContext struct {
+	context.Context
+	data map[string]string
+}
+
+type nirvanaHandler struct {
+	root router.Router
+}
+
+func newNirvanaHandler() *nirvanaHandler {
+	root, leaf, err := router.Parse("/hello")
+	if err != nil {
+		panic("can't create router")
+	}
+	leaf.AddExecutor(&nirvanaExecutor{})
+	return &nirvanaHandler{root}
+}
+
+func (h *nirvanaHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
+	ctx := rcontext.WithValue(rcontext.Background(), "Request", req)
+	ctx = rcontext.WithValue(ctx, "Response", resp)
+	c := &nirvanaContainer{
+		make(map[string]string),
+	}
+	e := h.root.Match(ctx, c, req.URL.Path)
+	if e != nil {
+		err := e.Execute(ctx)
+		if err != nil {
+			panic(fmt.Sprintf("invalid executor: %s", err.Error()))
+		}
+	}
+}
+
+func startNirvana() {
+	http.ListenAndServe(":"+strconv.Itoa(port), newNirvanaHandler())
 }
 
 // mock
